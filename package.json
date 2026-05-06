@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint .",
     "ingest": "tsx --env-file=.env.local scripts/ingest.ts",
-    "ingest:dry": "tsx --env-file=.env.local scripts/ingest.ts -- --dry-run"
+    "ingest:dry": "tsx --env-file=.env.local scripts/ingest.ts -- --dry-run",
+    "clean-laws": "tsx scripts/clean-laws.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.92.0",
