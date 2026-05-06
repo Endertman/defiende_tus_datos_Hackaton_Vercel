@@ -3,6 +3,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod"
 import { anthropic, MODEL } from "@/lib/anthropic"
 import { loadKnowledge, KNOWLEDGE_REVISOR } from "@/lib/knowledge"
 import { lookupEmpresa } from "@/lib/cmf"
+import { getUtm, getCmfInstituciones, isCmfRegistered, type UtmValue } from "@/lib/cmf-api"
 import { CORS_HEADERS, corsResponse } from "@/lib/cors"
 
 export const runtime = "nodejs"
@@ -59,7 +60,19 @@ const ClaimReview = z.object({
     ),
 })
 
-const SYSTEM = `Eres un revisor legal experto en la Ley 21.719 de Chile sobre Protección de Datos Personales.
+function buildSystem(utm: UtmValue | null): string {
+  const utmBlock = utm
+    ? `\nUTM VIGENTE (fuente oficial CMF, ${utm.periodo.mes}/${utm.periodo.anio}): $${utm.valor.toLocaleString("es-CL")} pesos chilenos.
+
+INSTRUCCIÓN OBLIGATORIA: En el campo sancion_maxima siempre incluye el equivalente en pesos junto al monto en UTM, usando el valor UTM anterior. Redondea a millones enteros.
+Formato requerido: "Hasta X.000 UTM (≈ $Y millones de pesos)"
+Ejemplos con UTM=$${utm.valor.toLocaleString("es-CL")}:
+  - Infracción leve    → hasta 500 UTM  → "Hasta 500 UTM (≈ $${Math.round((500 * utm.valor) / 1_000_000 * 10) / 10} millones de pesos)"
+  - Infracción grave   → hasta 5.000 UTM → "Hasta 5.000 UTM (≈ $${Math.round((5_000 * utm.valor) / 1_000_000 * 10) / 10} millones de pesos)"
+  - Infracción gravísima → hasta 10.000 UTM → "Hasta 10.000 UTM (≈ $${Math.round((10_000 * utm.valor) / 1_000_000 * 10) / 10} millones de pesos)"\n`
+    : ""
+
+  return `Eres un revisor legal experto en la Ley 21.719 de Chile sobre Protección de Datos Personales.
 Recibirás la transcripción de una entrevista entre un asistente legal y un ciudadano que presenta un posible caso de vulneración de datos personales.
 
 Tu trabajo:
@@ -73,7 +86,7 @@ REGLAS ESTRICTAS:
 - Si ya contactó a la empresa y no obtuvo respuesta en 30 días, el canal es "agencia".
 - Tipo de infracción: clasifica según Art. 34 (leve / grave / gravisima — usa "gravisima" sin tilde).
 - Datos críticos para suficiencia: nombre/razón social de la empresa, qué dato fue afectado, qué hizo la empresa, fecha aproximada, contacto previo con la empresa y respuesta.
-
+${utmBlock}
 FORMATO DEL BORRADOR (cuando suficiente=true):
 
 Señores [empresa o "Agencia de Protección de Datos Personales"]:
@@ -95,6 +108,7 @@ Firma: ___________________
 CONOCIMIENTO LEGAL DE REFERENCIA:
 
 ${loadKnowledge(KNOWLEDGE_REVISOR)}`
+}
 
 function buildTranscript(
   messages: Array<{ role: "user" | "assistant"; content: string }>,
@@ -120,6 +134,9 @@ export async function POST(req: Request) {
 
   const transcript = buildTranscript(body.messages)
 
+  // Fetch UTM + CMF institution list in parallel
+  const [utm, instituciones] = await Promise.all([getUtm(), getCmfInstituciones()])
+
   try {
     const response = await anthropic.messages.parse({
       model: MODEL,
@@ -127,7 +144,7 @@ export async function POST(req: Request) {
       system: [
         {
           type: "text",
-          text: SYSTEM,
+          text: buildSystem(utm),
           cache_control: { type: "ephemeral" },
         },
       ],
@@ -159,11 +176,31 @@ export async function POST(req: Request) {
       )
     }
 
-    // Enriquecer con verificación CMF
-    const cmf = parsed.empresa_nombre ? lookupEmpresa(parsed.empresa_nombre) : null
+    // CMF verification: live API first, CSV fallback
+    let cmfVerificado = false
+    let cmfMensaje: string | null = null
+
+    if (parsed.empresa_nombre) {
+      if (instituciones.length > 0) {
+        cmfVerificado = isCmfRegistered(parsed.empresa_nombre, instituciones) || false
+        cmfMensaje = cmfVerificado
+          ? `✓ ${parsed.empresa_nombre} está registrada en el padrón oficial de la CMF.`
+          : `${parsed.empresa_nombre} no aparece en el registro bancario CMF (puede ser entidad no bancaria).`
+      } else {
+        // Fall back to CSV-based lookup
+        const csv = lookupEmpresa(parsed.empresa_nombre)
+        cmfVerificado = csv.encontrada
+        cmfMensaje = csv.mensaje
+      }
+    }
 
     return Response.json(
-      { ...parsed, cmf_verificado: cmf?.encontrada ?? false, cmf_mensaje: cmf?.mensaje ?? null },
+      {
+        ...parsed,
+        cmf_verificado: cmfVerificado,
+        cmf_mensaje: cmfMensaje,
+        utm_valor: utm?.valor ?? null,
+      },
       {
         headers: {
           ...CORS_HEADERS,
