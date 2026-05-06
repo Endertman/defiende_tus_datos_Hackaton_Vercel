@@ -33,19 +33,29 @@ export function loadKnowledge(files: string[]): string {
     .join("\n\n---\n\n")
 }
 
-export const KNOWLEDGE_CHAT = [
-  "indice_enrutador.md",
-  "definiciones_y_principios.md",
-  "derecho_titular.md",
-  "agencia_y_reclamos.md",
+/**
+ * Archivos del knowledge base (3 leyes completas, ~470KB markdown).
+ *
+ * NOTA: estos archivos son grandes (~150KB c/u). Hacer full-dump al system
+ * prompt funciona con prompt cache de Anthropic, pero quema ~110K tokens
+ * de la ventana de contexto. Lo recomendable es migrar los endpoints a
+ * `retrieveContext()` (Upstash Vector) y dejar el full-dump como fallback.
+ *
+ * Mientras Upstash no esté configurado, los endpoints siguen funcionando
+ * con full-dump (más caro pero funcional para el demo).
+ */
+
+export const ALL_LAWS = [
+  "19628.md", // vigente HOY (texto pre-reforma)
+  "21521.md", // Ley Fintec (vigente)
+  "21719.md", // promulgada, vigor 13-DIC-2026
 ]
 
-export const KNOWLEDGE_REVISOR = [
-  "definiciones_y_principios.md",
-  "derecho_titular.md",
-  "obligaciones_e_infracciones.md",
-  "agencia_y_reclamos.md",
-]
+/** Para el agente entrevistador en /api/chat-legal. */
+export const KNOWLEDGE_CHAT = ALL_LAWS
+
+/** Para el revisor en /api/validate-claim. */
+export const KNOWLEDGE_REVISOR = ALL_LAWS
 
 /* ─────────────────────── RAG (modo retrieval) ─────────────────────── */
 

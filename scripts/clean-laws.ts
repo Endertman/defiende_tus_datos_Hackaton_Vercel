@@ -108,11 +108,19 @@ function cleanText(raw: string, cfg: LawConfig): string {
   }
 
   // 5. Marcar headers (puede expandir 1 línea en 2: header + body).
+  // State: una vez que entramos a DISPOSICIONES TRANSITORIAS, los
+  // "Artículo primero/segundo/...-" son artículos transitorios (### no ##).
   const marked: string[] = []
+  let inTransitorias = false
   for (const l of collapsed) {
-    const out = markHeader(l)
-    if (Array.isArray(out)) marked.push(...out)
-    else marked.push(out)
+    const out = markHeader(l, inTransitorias)
+    const lines = Array.isArray(out) ? out : [out]
+    for (const x of lines) {
+      if (/^## DISPOSICIONES TRANSITORIAS|^## Disposiciones transitorias/.test(x)) {
+        inTransitorias = true
+      }
+      marked.push(x)
+    }
   }
 
   // 6. Eliminar preámbulo: descartar todo antes del primer header (## o ###).
@@ -138,8 +146,14 @@ function cleanText(raw: string, cfg: LawConfig): string {
 /**
  * Devuelve la línea original (string) o un array [header, body] si detectó
  * un patrón de artículo / título.
+ *
+ * @param inTransitorias true si ya pasamos por "DISPOSICIONES TRANSITORIAS"
+ *  en este archivo. En ese caso los Artículos ordinales son transitorios (h3).
  */
-function markHeader(line: string): string | string[] {
+function markHeader(
+  line: string,
+  inTransitorias: boolean,
+): string | string[] {
   if (line === "") return line
   if (/^#{1,6}\s/.test(line)) return line // ya es header (idempotencia)
 
@@ -147,41 +161,54 @@ function markHeader(line: string): string | string[] {
   // de cierre/apertura cuando un texto está dentro de una modificación).
   const stripped = line.replace(/^["“”]/, "")
 
+  // Heurística clave: una línea es un header de sección sólo si es CORTA.
+  // Un párrafo de un artículo puede empezar con "Título III de esta ley..."
+  // pero su largo total los descalifica como sección.
+  const isShort = stripped.length <= 60
+
   // ── Disposiciones transitorias ───────────────────────────────────
-  if (/^DISPOSICIONES\s+TRANSITORIAS/i.test(stripped)) {
+  if (/^DISPOSICIONES\s+TRANSITORIAS/i.test(stripped) && isShort) {
     return `## DISPOSICIONES TRANSITORIAS`
   }
-  if (/^Disposiciones\s+transitorias/i.test(stripped)) {
+  if (/^Disposiciones\s+transitorias\b/i.test(stripped) && isShort) {
     return `## Disposiciones transitorias`
   }
 
   // ── TÍTULO X / Título Preliminar ─────────────────────────────────
-  if (/^TÍTULO\s+/i.test(stripped)) {
-    return `## ${stripped.replace(/["”]+$/, "").trim()}`
-  }
-  if (
-    /^Título\s+(Preliminar|Final|[IVXLCDM]+|\b[A-Za-záéíóúñ]+\b)/i.test(
-      stripped,
-    )
-  ) {
-    return `## ${stripped.replace(/["”]+$/, "").trim()}`
+  // Estricto: la línea debe ser SOLO "Título <numeral>" (con punto opcional al
+  // final). Evita matchear referencias dentro de párrafos como
+  // "Título III de esta ley." o "el siguiente nuevo Título XXIX".
+  // Numerales romanos limitados a I–XX (suficiente para cualquier ley chilena).
+  const ROMAN_OK =
+    "(?:Preliminar|Final|I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII|XIII|XIV|XV|XVI|XVII|XVIII|XIX|XX)"
+  const titleStrict = new RegExp(
+    `^(?:TÍTULO|Título)\\s+${ROMAN_OK}\\s*\\.?["”]?\\s*$`,
+    "i",
+  )
+  if (titleStrict.test(stripped) && isShort) {
+    return `## ${stripped.replace(/["”.]+$/, "").trim()}`
   }
 
   // ── Párrafo (subdivisión dentro de un Título) ────────────────────
-  if (/^Párrafo\s+\d/i.test(stripped)) {
+  if (/^Párrafo\s+\d/i.test(stripped) && isShort) {
     return `## ${stripped.replace(/["”]+$/, "").trim()}`
   }
 
   // ── Artículos modificatorios (ordinales: primero, segundo…) ──────
+  // Si estamos dentro de DISPOSICIONES TRANSITORIAS, son transitorios → ###.
+  // Si no, son artículos modificatorios principales (ej. 21.719) → ##.
   const modif =
     /^Artículo\s+(primero|segundo|tercero|cuarto|quinto|sexto|séptimo|septimo|octavo|noveno|décimo|decimo)\.-\s*/i.exec(
       stripped,
     )
   if (modif) {
     const ord = modif[1].toLowerCase()
+    const level = inTransitorias ? "###" : "##"
+    const suffix = inTransitorias ? " transitorio" : ""
     const rest = stripped.slice(modif[0].length).trim()
-    if (rest) return [`## Artículo ${ord}.-`, rest]
-    return `## Artículo ${ord}.-`
+    const header = `${level} Artículo ${ord}${suffix}.-`
+    if (rest) return [header, rest]
+    return header
   }
 
   // ── Artículos sustantivos (numéricos: 1°, 8 bis, 30 bis) ─────────
