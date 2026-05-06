@@ -32,6 +32,7 @@ export const KNOWLEDGE_CHAT = [
   "definiciones_y_principios.md",
   "derecho_titular.md",
   "agencia_y_reclamos.md",
+  "dicom_casos_tipicos.md",
 ]
 
 export const KNOWLEDGE_REVISOR = [
@@ -39,4 +40,5 @@ export const KNOWLEDGE_REVISOR = [
   "derecho_titular.md",
   "obligaciones_e_infracciones.md",
   "agencia_y_reclamos.md",
+  "dicom_casos_tipicos.md",
 ]

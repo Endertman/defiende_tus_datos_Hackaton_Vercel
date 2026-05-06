@@ -2,6 +2,7 @@ import { z } from "zod/v4"
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod"
 import { anthropic, MODEL } from "@/lib/anthropic"
 import { loadKnowledge, KNOWLEDGE_REVISOR } from "@/lib/knowledge"
+import { lookupEmpresa } from "@/lib/cmf"
 import { CORS_HEADERS, corsResponse } from "@/lib/cors"
 
 export const runtime = "nodejs"
@@ -23,6 +24,9 @@ const ClaimReview = z.object({
   suficiente: z
     .boolean()
     .describe("¿Hay info suficiente para redactar el reclamo formal?"),
+  empresa_nombre: z
+    .string()
+    .describe("Nombre exacto de la empresa o entidad reclamada, tal como la mencionó el usuario."),
   articulos_vulnerados: z
     .array(z.string())
     .describe(
@@ -155,15 +159,21 @@ export async function POST(req: Request) {
       )
     }
 
-    return Response.json(parsed, {
-      headers: {
-        ...CORS_HEADERS,
-        "x-cache-read": String(response.usage.cache_read_input_tokens ?? 0),
-        "x-cache-write": String(
-          response.usage.cache_creation_input_tokens ?? 0,
-        ),
+    // Enriquecer con verificación CMF
+    const cmf = parsed.empresa_nombre ? lookupEmpresa(parsed.empresa_nombre) : null
+
+    return Response.json(
+      { ...parsed, cmf_verificado: cmf?.encontrada ?? false, cmf_mensaje: cmf?.mensaje ?? null },
+      {
+        headers: {
+          ...CORS_HEADERS,
+          "x-cache-read": String(response.usage.cache_read_input_tokens ?? 0),
+          "x-cache-write": String(
+            response.usage.cache_creation_input_tokens ?? 0,
+          ),
+        },
       },
-    })
+    )
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return Response.json(
