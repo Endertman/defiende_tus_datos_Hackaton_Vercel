@@ -1,7 +1,18 @@
 import { Resend } from "resend"
 import type { Caso } from "./types"
 
-const resend = new Resend(process.env.RESEND_API_KEY)
+let _resend: Resend | null = null
+
+function getResend(): Resend {
+  const key = process.env.RESEND_API_KEY
+  if (!key) {
+    throw new Error(
+      "RESEND_API_KEY no configurada. Agrégala en Vercel Environment Variables para usar envío de correo.",
+    )
+  }
+  if (!_resend) _resend = new Resend(key)
+  return _resend
+}
 
 export async function sendEmail({
   to,
@@ -12,7 +23,7 @@ export async function sendEmail({
   subject: string
   html: string
 }) {
-  const { data, error } = await resend.emails.send({
+  const { data, error } = await getResend().emails.send({
     from: process.env.FROM_EMAIL ?? "onboarding@resend.dev",
     to,
     subject,
