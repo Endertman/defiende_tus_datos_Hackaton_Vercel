@@ -15,11 +15,15 @@ const PHASE_STEP: Record<Phase, number> = {
 }
 
 export function SidePanel() {
-  const { messages, phase, isStreaming, reviewResult, sendMessage, reset } =
-    useLegalChat()
+  const {
+    messages, phase, isStreaming, reviewResult,
+    sendMessage, sendClaim, isSendingClaim, claimSentId, reset,
+  } = useLegalChat()
 
   const currentStep = PHASE_STEP[phase]
-  const showCopyButton = phase === "entrega" && !!reviewResult?.borrador_reclamo
+  const isEntrega = phase === "entrega" && !!reviewResult?.borrador_reclamo
+  const showCopyButton = isEntrega
+  const showSendButton = isEntrega && !claimSentId
   const inputDisabled = isStreaming || phase === "revisando"
 
   return (
@@ -39,9 +43,13 @@ export function SidePanel() {
       />
       <InputArea
         showCopyButton={showCopyButton}
+        showSendButton={showSendButton}
         disabled={inputDisabled}
         onSend={sendMessage}
+        onSendClaim={sendClaim}
         borradorReclamo={reviewResult?.borrador_reclamo ?? null}
+        isSendingClaim={isSendingClaim}
+        claimSentId={claimSentId}
       />
     </aside>
   )

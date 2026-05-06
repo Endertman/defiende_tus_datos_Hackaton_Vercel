@@ -3,6 +3,8 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod"
 import { anthropic, MODEL } from "@/lib/anthropic"
 import { loadKnowledge, KNOWLEDGE_REVISOR, retrieveContext } from "@/lib/knowledge"
 import { transcriptQuery } from "@/lib/rag-query"
+import { lookupEmpresa } from "@/lib/cmf"
+import { getUtm, getCmfInstituciones, isCmfRegistered, type UtmValue } from "@/lib/cmf-api"
 import { CORS_HEADERS, corsResponse } from "@/lib/cors"
 
 export const runtime = "nodejs"
@@ -24,6 +26,9 @@ const ClaimReview = z.object({
   suficiente: z
     .boolean()
     .describe("¿Hay info suficiente para redactar el reclamo formal?"),
+  empresa_nombre: z
+    .string()
+    .describe("Nombre exacto de la empresa o entidad reclamada, tal como la mencionó el usuario."),
   articulos_vulnerados: z
     .array(z.string())
     .describe(
@@ -56,7 +61,19 @@ const ClaimReview = z.object({
     ),
 })
 
-const SYSTEM = `Eres un revisor legal experto en la Ley 21.719 de Chile sobre Protección de Datos Personales.
+function buildSystem(utm: UtmValue | null): string {
+  const utmBlock = utm
+    ? `\nUTM VIGENTE (fuente oficial CMF, ${utm.periodo.mes}/${utm.periodo.anio}): $${utm.valor.toLocaleString("es-CL")} pesos chilenos.
+
+INSTRUCCIÓN OBLIGATORIA: En el campo sancion_maxima siempre incluye el equivalente en pesos junto al monto en UTM, usando el valor UTM anterior. Redondea a millones enteros.
+Formato requerido: "Hasta X.000 UTM (≈ $Y millones de pesos)"
+Ejemplos con UTM=$${utm.valor.toLocaleString("es-CL")}:
+  - Infracción leve    → hasta 500 UTM  → "Hasta 500 UTM (≈ $${Math.round((500 * utm.valor) / 1_000_000 * 10) / 10} millones de pesos)"
+  - Infracción grave   → hasta 5.000 UTM → "Hasta 5.000 UTM (≈ $${Math.round((5_000 * utm.valor) / 1_000_000 * 10) / 10} millones de pesos)"
+  - Infracción gravísima → hasta 10.000 UTM → "Hasta 10.000 UTM (≈ $${Math.round((10_000 * utm.valor) / 1_000_000 * 10) / 10} millones de pesos)"\n`
+    : ""
+
+  return `Eres un revisor legal experto en la Ley 21.719 de Chile sobre Protección de Datos Personales.
 Recibirás la transcripción de una entrevista entre un asistente legal y un ciudadano que presenta un posible caso de vulneración de datos personales.
 
 Tu trabajo:
@@ -70,7 +87,7 @@ REGLAS ESTRICTAS:
 - Si ya contactó a la empresa y no obtuvo respuesta en 30 días, el canal es "agencia".
 - Tipo de infracción: clasifica según Art. 34 (leve / grave / gravisima — usa "gravisima" sin tilde).
 - Datos críticos para suficiencia: nombre/razón social de la empresa, qué dato fue afectado, qué hizo la empresa, fecha aproximada, contacto previo con la empresa y respuesta.
-
+${utmBlock}
 FORMATO DEL BORRADOR (cuando suficiente=true):
 
 Señores [empresa o "Agencia de Protección de Datos Personales"]:
@@ -89,7 +106,8 @@ PETICIÓN CONCRETA:
 Fecha: [fecha actual o "[FECHA]"]
 Firma: ___________________
 
-El conocimiento legal (Leyes 19.628 vigente, 21.521 Fintec, 21.719 promulgada) se te entrega como bloque(s) aparte. Úsalo como única fuente: nunca inventes artículos, multas ni procedimientos.`
+El conocimiento legal (Leyes 19.628 vigente, 21.521 Fintec, 21.719 promulgada y casos DICOM típicos) se te entrega como bloque(s) aparte. Úsalo como única fuente: nunca inventes artículos, multas ni procedimientos.`
+}
 
 function buildTranscript(
   messages: Array<{ role: "user" | "assistant"; content: string }>,
@@ -115,19 +133,23 @@ export async function POST(req: Request) {
 
   const transcript = buildTranscript(body.messages)
 
-  let ragContext = ""
-  try {
-    const query = transcriptQuery(body.messages)
-    ragContext = await retrieveContext(query, {
+  // Fetch UTM + CMF institution list + RAG retrieval en paralelo.
+  // Cualquier falla individual (típicamente RAG si Upstash no está
+  // configurado) se degrada gracefully al fallback que corresponda.
+  const [utm, instituciones, ragContext] = await Promise.all([
+    getUtm(),
+    getCmfInstituciones(),
+    retrieveContext(transcriptQuery(body.messages), {
       type: ["ley", "casos"],
       topK: 6,
-    })
-  } catch (err) {
-    console.warn("[validate-claim] retrieval falló, sigo sin RAG:", err)
-  }
+    }).catch((err) => {
+      console.warn("[validate-claim] retrieval falló, sigo sin RAG:", err)
+      return ""
+    }),
+  ])
 
-  // Knowledge: retrieval-first, full-dump fallback. Lo ponemos en el system
-  // para aprovechar prompt cache cuando es full-dump (idéntico entre llamadas).
+  // Knowledge: retrieval-first, full-dump fallback. Va como system block
+  // separado para aprovechar prompt cache cuando es full-dump.
   const knowledgeBlockText = ragContext
     ? `KNOWLEDGE — citas verbatim relevantes al caso (única fuente para artículos, multas y plazos):\n\n${ragContext}`
     : `KNOWLEDGE — texto íntegro de las leyes vigentes (referencia única; nunca inventes):\n\n${loadKnowledge(KNOWLEDGE_REVISOR)}`
@@ -139,7 +161,7 @@ export async function POST(req: Request) {
       system: [
         {
           type: "text",
-          text: SYSTEM,
+          text: buildSystem(utm),
           cache_control: { type: "ephemeral" },
         },
         {
@@ -176,15 +198,41 @@ export async function POST(req: Request) {
       )
     }
 
-    return Response.json(parsed, {
-      headers: {
-        ...CORS_HEADERS,
-        "x-cache-read": String(response.usage.cache_read_input_tokens ?? 0),
-        "x-cache-write": String(
-          response.usage.cache_creation_input_tokens ?? 0,
-        ),
+    // CMF verification: live API first, CSV fallback
+    let cmfVerificado = false
+    let cmfMensaje: string | null = null
+
+    if (parsed.empresa_nombre) {
+      if (instituciones.length > 0) {
+        cmfVerificado = isCmfRegistered(parsed.empresa_nombre, instituciones) || false
+        cmfMensaje = cmfVerificado
+          ? `✓ ${parsed.empresa_nombre} está registrada en el padrón oficial de la CMF.`
+          : `${parsed.empresa_nombre} no aparece en el registro bancario CMF (puede ser entidad no bancaria).`
+      } else {
+        // Fall back to CSV-based lookup
+        const csv = lookupEmpresa(parsed.empresa_nombre)
+        cmfVerificado = csv.encontrada
+        cmfMensaje = csv.mensaje
+      }
+    }
+
+    return Response.json(
+      {
+        ...parsed,
+        cmf_verificado: cmfVerificado,
+        cmf_mensaje: cmfMensaje,
+        utm_valor: utm?.valor ?? null,
       },
-    })
+      {
+        headers: {
+          ...CORS_HEADERS,
+          "x-cache-read": String(response.usage.cache_read_input_tokens ?? 0),
+          "x-cache-write": String(
+            response.usage.cache_creation_input_tokens ?? 0,
+          ),
+        },
+      },
+    )
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return Response.json(
