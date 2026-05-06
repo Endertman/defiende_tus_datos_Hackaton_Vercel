@@ -13,12 +13,15 @@ export type ChatMessage = {
 
 export type ClaimReview = {
   suficiente: boolean
+  empresa_nombre: string
   articulos_vulnerados: string[]
   tipo_infraccion: "leve" | "grave" | "gravisima"
   sancion_maxima: string
   canal_recomendado: "empresa_directa" | "agencia" | "tribunal"
   pregunta_faltante: string | null
   borrador_reclamo: string | null
+  cmf_verificado: boolean
+  cmf_mensaje: string | null
 }
 
 type PersistedState = {
@@ -63,6 +66,8 @@ export function useLegalChat() {
   const [isStreaming, setIsStreaming] = useState(false)
   const [reviewResult, setReviewResult] = useState<ClaimReview | null>(null)
   const [interviewCount, setInterviewCount] = useState(0)
+  const [isSendingClaim, setIsSendingClaim] = useState(false)
+  const [claimSentId, setClaimSentId] = useState<string | null>(null)
 
   // Ref to track whether the initial greeting has been sent
   const greetingSent = useRef(false)
@@ -165,7 +170,7 @@ export function useLegalChat() {
         {
           id: errorId,
           role: "assistant",
-          content: "Lo siento, ocurrió un error al conectar con el servidor. Por favor intenta de nuevo.",
+          content: "Lo siento, tuve un problema técnico. Por favor intente de nuevo en un momento.",
         },
       ])
     } finally {
@@ -202,10 +207,14 @@ export function useLegalChat() {
         setReviewResult(review)
         setPhase("entrega")
 
+        const cmfLinea = review.cmf_mensaje
+          ? `\nVerificación CMF: ${review.cmf_mensaje}`
+          : ""
+
         const systemMsg: ChatMessage = {
           id: uid(),
           role: "user",
-          content: `[SISTEMA — Hallazgos del Revisor Legal]\n\nArtículos vulnerados: ${review.articulos_vulnerados.join(", ")}\nTipo de infracción: ${review.tipo_infraccion}\nSanción máxima: ${review.sancion_maxima}\nCanal recomendado: ${review.canal_recomendado}\n\nBorrador del reclamo:\n${review.borrador_reclamo}`,
+          content: `[SISTEMA — Hallazgos del Revisor Legal]\n\nEmpresa: ${review.empresa_nombre}\nArtículos vulnerados: ${review.articulos_vulnerados.join(", ")}\nTipo de infracción: ${review.tipo_infraccion}\nSanción máxima: ${review.sancion_maxima}\nCanal recomendado: ${review.canal_recomendado}${cmfLinea}\n\nCarta de reclamo:\n${review.borrador_reclamo}`,
         }
 
         const updatedMessages = [...currentMessages, systemMsg]
@@ -219,7 +228,7 @@ export function useLegalChat() {
         const followUp: ChatMessage = {
           id: uid(),
           role: "assistant",
-          content: review.pregunta_faltante || "Necesito un dato más para completar tu reclamo. ¿Podrías darme más detalles?",
+          content: review.pregunta_faltante || "Necesito un dato más para completar su reclamo. ¿Podría darme más detalles?",
         }
 
         setMessages((prev) => [...prev, followUp])
@@ -231,7 +240,7 @@ export function useLegalChat() {
       const errorMsg: ChatMessage = {
         id: uid(),
         role: "assistant",
-        content: "Hubo un problema al revisar tu caso. Voy a intentar con otra pregunta. ¿Podrías repetir el último dato?",
+        content: "Hubo un problema al revisar su caso. ¿Podría repetir el último dato que me contó?",
       }
       setMessages((prev) => [...prev, errorMsg])
     }
@@ -301,7 +310,7 @@ export function useLegalChat() {
         {
           id: errorId,
           role: "assistant",
-          content: "Lo siento, ocurrió un error. Por favor intenta de nuevo.",
+          content: "Lo siento, ocurrió un error. Por favor intente de nuevo.",
         },
       ])
     } finally {
@@ -309,6 +318,38 @@ export function useLegalChat() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isStreaming])
+
+  // ── Enviar reclamo formal ─────────────────────────────────────────────────
+
+  const sendClaim = useCallback(async () => {
+    const { reviewResult: review } = stateRef.current
+    if (!review?.borrador_reclamo || isSendingClaim) return
+    setIsSendingClaim(true)
+    try {
+      const res = await fetch("/api/send-claim", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          empresa: review.empresa_nombre,
+          articulosVulnerados: review.articulos_vulnerados,
+          tipoInfraccion: review.tipo_infraccion,
+          sancionMaxima: review.sancion_maxima,
+          canalRecomendado: review.canal_recomendado,
+          borrador: review.borrador_reclamo,
+          cmfVerificado: review.cmf_verificado ?? false,
+          // recipientEmail omitido — el servidor usa MOCK_BANK_EMAIL
+        }),
+      })
+      if (!res.ok) throw new Error(`send-claim ${res.status}`)
+      const { casoId } = await res.json()
+      setClaimSentId(casoId)
+    } catch (err) {
+      console.error("sendClaim error:", err)
+    } finally {
+      setIsSendingClaim(false)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSendingClaim])
 
   // ── Reset ──────────────────────────────────────────────────────────────────
 
@@ -337,6 +378,9 @@ export function useLegalChat() {
     isStreaming,
     reviewResult,
     sendMessage,
+    sendClaim,
+    isSendingClaim,
+    claimSentId,
     reset,
   }
 }

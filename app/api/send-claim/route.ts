@@ -23,8 +23,8 @@ const Body = z.object({
   userEmail: z.string().optional(),
   userName: z.string().optional(),
   phone: z.string().optional(),
-  // correo del banco/empresa mock — en producción vendría de un lookup
-  recipientEmail: z.string(),
+  // correo destino del reclamo — si no se envía, usa MOCK_BANK_EMAIL del servidor
+  recipientEmail: z.string().optional(),
 })
 
 export async function POST(req: Request) {
@@ -60,8 +60,18 @@ export async function POST(req: Request) {
     updatedAt: sentAt,
   }
 
+  const recipientEmail =
+    body.recipientEmail ?? process.env.MOCK_BANK_EMAIL ?? ""
+
+  if (!recipientEmail) {
+    return Response.json(
+      { error: "No hay correo destino configurado. Agrega MOCK_BANK_EMAIL al .env.local." },
+      { status: 400, headers: CORS_HEADERS },
+    )
+  }
+
   try {
-    await sendClaim(caso, body.recipientEmail)
+    await sendClaim(caso, recipientEmail)
     await saveCaso(id, caso)
 
     notifyTeam({
