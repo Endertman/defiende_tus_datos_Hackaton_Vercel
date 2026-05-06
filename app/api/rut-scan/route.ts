@@ -8,7 +8,7 @@ export const runtime = "nodejs"
 // Sector-level penetration rates based on published Chilean market statistics:
 // Bancarización: ~92% (SBIF 2023), Telefonía móvil: ~98% (Subtel 2023),
 // Retail financiero: ~70%, AFP: ~90% cotizantes activos, Isapres: ~25% + Fonasa ~75%,
-// Plataformas digitales: ~65%, Fintech activos: ~35%
+// Plataformas digitales: ~65%, Fintech activos: ~35%, Servicios básicos: ~70%
 const SECTOR_PENETRACION: Record<string, number> = {
   banco:       0.92,
   telco:       0.98,
@@ -16,10 +16,11 @@ const SECTOR_PENETRACION: Record<string, number> = {
   fintech:     0.35,
   plataforma:  0.65,
   seguro_afp:  0.88,
+  utilidad:    0.70,
 }
 
 // Companies whose databases cover virtually all Chileans regardless of voluntary relationship
-const SIEMPRE_PRESENTES = new Set(["equifax-dicom", "entel", "movistar", "claro", "wom"])
+const SIEMPRE_PRESENTES = new Set(["equifax-dicom", "entel", "movistar", "claro", "wom", "transbank"])
 
 export async function OPTIONS() {
   return corsResponse()

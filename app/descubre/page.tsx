@@ -4,7 +4,7 @@ import { useState } from "react"
 import Link from "next/link"
 import { Shield, AlertTriangle, CheckCircle, ChevronRight, ArrowLeft, Loader2, Search } from "lucide-react"
 import type { EmpresaPerfil, Sector, Riesgo } from "@/lib/empresas"
-import { SECTOR_LABEL, SECTOR_COLOR, RIESGO_COLOR } from "@/lib/empresas"
+import { EMPRESAS, SECTOR_LABEL, SECTOR_COLOR, RIESGO_COLOR } from "@/lib/empresas"
 
 type EmpresaResult = EmpresaPerfil & { confirmada: boolean; datosExpuestos: number }
 
@@ -49,13 +49,13 @@ export default function DescubrePage() {
     }
   }
 
-  const empresasFiltradas = result?.empresas.filter(
-    (e) => filtro === "todas" || e.sector === filtro,
-  ) ?? []
+  const confirmadas = result?.empresas.filter((e) => e.confirmada) ?? []
 
-  const sectores = result
-    ? (Array.from(new Set(result.empresas.map((e) => e.sector))) as Sector[])
-    : []
+  const empresasFiltradas = confirmadas.filter(
+    (e) => filtro === "todas" || e.sector === filtro,
+  )
+
+  const sectores = Array.from(new Set(confirmadas.map((e) => e.sector))) as Sector[]
 
   // ── Landing ────────────────────────────────────────────────────────────────
   if (!result) {
@@ -128,7 +128,7 @@ export default function DescubrePage() {
 
           <div className="mt-8 grid grid-cols-3 gap-3 text-center">
             {[
-              { n: "21+", label: "empresas analizadas" },
+              { n: `${EMPRESAS.length}`, label: "empresas analizadas" },
               { n: "Ley 21.719", label: "base legal" },
               { n: "ARCO+P", label: "derechos aplicables" },
             ].map((s) => (
@@ -196,7 +196,7 @@ export default function DescubrePage() {
             onClick={() => setFiltro("todas")}
             className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${filtro === "todas" ? "bg-foreground text-background" : "bg-muted text-muted-foreground hover:text-foreground"}`}
           >
-            Todas
+            Todas ({confirmadas.length})
           </button>
           {sectores.map((s) => (
             <button
