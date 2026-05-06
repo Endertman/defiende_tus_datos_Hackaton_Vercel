@@ -76,6 +76,8 @@ type ParsedFile = {
   filename: string
   content: string
   type: ChunkMetadata["type"]
+  /** Nombre canónico que se prefija a cada chunk (mejora embeddings). */
+  prefix?: string
 }
 
 function readKnowledgeFiles(only?: string): ParsedFile[] {
@@ -91,10 +93,22 @@ function readKnowledgeFiles(only?: string): ParsedFile[] {
     if (filename.endsWith(".md")) {
       const parsed = matter(raw)
       const fmType = parsed.data?.type as ChunkMetadata["type"] | undefined
+      const fmName = parsed.data?.nombre as string | undefined
+      const fmFuente = parsed.data?.fuente as string | undefined
+      // Construye prefijo informativo desde frontmatter:
+      //   "Ley N° 21.719 — Regula la protección..."
+      const parts: string[] = []
+      if (fmFuente) parts.push(`Ley N° ${fmFuente}`)
+      if (fmName) parts.push(fmName)
+      const prefix =
+        parts.length > 0
+          ? parts.join(" — ")
+          : filename.replace(/\.md$/, "")
       return {
         filename,
         content: parsed.content,
         type: fmType ?? inferType(filename),
+        prefix,
       }
     }
     return {
@@ -106,7 +120,9 @@ function readKnowledgeFiles(only?: string): ParsedFile[] {
 }
 
 function chunkFile(file: ParsedFile): Chunk[] {
-  if (file.filename.endsWith(".md")) return chunkMarkdown(file.content)
+  if (file.filename.endsWith(".md")) {
+    return chunkMarkdown(file.content, { prefix: file.prefix })
+  }
   if (file.filename.endsWith(".csv")) return chunkCsv(file.content)
   return chunkPlainText(file.content)
 }

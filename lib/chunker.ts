@@ -14,8 +14,19 @@ const MIN_CHARS = 100
 const CSV_ROWS_PER_CHUNK = 25
 
 export type Chunk = {
+  /** Texto que se embeberá Y se inyectará al prompt. Incluye prefijo de contexto. */
   text: string
+  /** Breadcrumb pretty-print (para metadata, citas y debugging). */
   section?: string
+}
+
+export type ChunkOptions = {
+  /**
+   * Prefijo legible que se antepone a cada chunk antes del embedding,
+   * típicamente el nombre de la ley desde frontmatter.
+   * Ej: "Ley N° 21.719 — Protección de Datos Personales"
+   */
+  prefix?: string
 }
 
 /* ─────────────────────── Markdown ─────────────────────── */
@@ -24,32 +35,35 @@ type MarkdownBlock = { breadcrumb: string[]; body: string[] }
 
 /**
  * Divide markdown en bloques delimitados por headers (## y ###).
- * Mantiene un breadcrumb jerárquico para cada bloque.
+ * Ignora H1 a propósito: el H1 suele ser el nombre del documento, que
+ * ya viene como `prefix` desde frontmatter. Si lo incluyéramos, el
+ * breadcrumb empezaría con la misma string que el prefijo y se duplicaría
+ * en el texto que se embebe.
  */
 function splitMarkdownByHeaders(content: string): MarkdownBlock[] {
   const lines = content.split("\n")
   const blocks: MarkdownBlock[] = []
 
-  let h1: string | null = null
   let h2: string | null = null
   let h3: string | null = null
   let buffer: string[] = []
 
   const flush = () => {
     if (buffer.length === 0) return
-    const breadcrumb = [h1, h2, h3].filter(Boolean) as string[]
+    const breadcrumb = [h2, h3].filter(Boolean) as string[]
     blocks.push({ breadcrumb, body: buffer })
     buffer = []
   }
 
   for (const line of lines) {
-    const m1 = /^#\s+(.+?)\s*$/.exec(line)
+    const m1 = /^#\s+/.test(line)
     const m2 = /^##\s+(.+?)\s*$/.exec(line)
     const m3 = /^###\s+(.+?)\s*$/.exec(line)
 
     if (m1) {
+      // H1 ignorado: el contenido bajo H1 sin H2/H3 todavía se acumula en buffer
+      // y se asociará al primer H2/H3 que aparezca, o al cierre final.
       flush()
-      h1 = m1[1]
       h2 = null
       h3 = null
     } else if (m2) {
@@ -85,28 +99,59 @@ function splitByParagraphs(text: string, maxChars: number): string[] {
   return out
 }
 
-export function chunkMarkdown(content: string): Chunk[] {
+/**
+ * Construye el texto enriquecido que se embeberá: prefijo (ley) + breadcrumb +
+ * cuerpo. El embedding "ve" la jerarquía legal completa, no solo párrafos sueltos.
+ *
+ * Ejemplo de salida:
+ *   Ley N° 21.719 — Protección de Datos Personales
+ *   Título I > Artículo 8°.- Derecho de oposición
+ *
+ *   El titular de datos tiene derecho a oponerse...
+ */
+function enrichedText(body: string, section: string | undefined, prefix?: string): string {
+  const header = [prefix, section].filter(Boolean).join("\n")
+  return header ? `${header}\n\n${body}` : body
+}
+
+export function chunkMarkdown(content: string, opts: ChunkOptions = {}): Chunk[] {
   const blocks = splitMarkdownByHeaders(content)
   const chunks: Chunk[] = []
 
   for (const block of blocks) {
     const section = block.breadcrumb.join(" > ") || undefined
-    const text = block.body.join("\n").trim()
-    if (text.length < MIN_CHARS && chunks.length > 0) {
-      const last = chunks[chunks.length - 1]
-      last.text += "\n\n" + (section ? `**${section}**\n` : "") + text
+    const body = block.body.join("\n").trim()
+
+    // Skip headers solos sin body real: empeoran retrieval (matchean por
+    // título sin aportar contenido).
+    if (body.length < MIN_CHARS) {
+      if (chunks.length > 0) {
+        // Pegamos el contenido al chunk previo para no perderlo.
+        const last = chunks[chunks.length - 1]
+        const merged =
+          last.text + "\n\n" + (section ? `**${section}**\n` : "") + body
+        last.text = merged
+      }
       continue
     }
-    if (text.length <= MAX_CHARS) {
-      chunks.push({ text, section })
+
+    if (body.length <= MAX_CHARS) {
+      chunks.push({
+        text: enrichedText(body, section, opts.prefix),
+        section,
+      })
       continue
     }
-    const subs = splitByParagraphs(text, MAX_CHARS)
-    subs.forEach((s, i) => {
+
+    const subs = splitByParagraphs(body, MAX_CHARS)
+    subs.forEach((subBody, i) => {
       const subSection = section
         ? `${section} (parte ${i + 1}/${subs.length})`
         : undefined
-      chunks.push({ text: s, section: subSection })
+      chunks.push({
+        text: enrichedText(subBody, subSection, opts.prefix),
+        section: subSection,
+      })
     })
   }
 

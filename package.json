@@ -9,6 +9,8 @@
     "lint": "eslint .",
     "ingest": "tsx --env-file=.env.local scripts/ingest.ts",
     "ingest:dry": "tsx --env-file=.env.local scripts/ingest.ts -- --dry-run",
+    "probe": "tsx --env-file=.env.local scripts/probe.ts",
+    "smoke": "tsx --env-file=.env.local scripts/smoke-test.ts",
     "clean-laws": "tsx scripts/clean-laws.ts"
   },
   "dependencies": {

@@ -1,7 +1,8 @@
 import { z } from "zod/v4"
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod"
 import { anthropic, MODEL } from "@/lib/anthropic"
-import { loadKnowledge, KNOWLEDGE_REVISOR } from "@/lib/knowledge"
+import { loadKnowledge, KNOWLEDGE_REVISOR, retrieveContext } from "@/lib/knowledge"
+import { transcriptQuery } from "@/lib/rag-query"
 import { CORS_HEADERS, corsResponse } from "@/lib/cors"
 
 export const runtime = "nodejs"
@@ -88,9 +89,7 @@ PETICIÓN CONCRETA:
 Fecha: [fecha actual o "[FECHA]"]
 Firma: ___________________
 
-CONOCIMIENTO LEGAL DE REFERENCIA:
-
-${loadKnowledge(KNOWLEDGE_REVISOR)}`
+El conocimiento legal (Leyes 19.628 vigente, 21.521 Fintec, 21.719 promulgada) se te entrega como bloque(s) aparte. Úsalo como única fuente: nunca inventes artículos, multas ni procedimientos.`
 
 function buildTranscript(
   messages: Array<{ role: "user" | "assistant"; content: string }>,
@@ -116,6 +115,23 @@ export async function POST(req: Request) {
 
   const transcript = buildTranscript(body.messages)
 
+  let ragContext = ""
+  try {
+    const query = transcriptQuery(body.messages)
+    ragContext = await retrieveContext(query, {
+      type: ["ley", "casos"],
+      topK: 6,
+    })
+  } catch (err) {
+    console.warn("[validate-claim] retrieval falló, sigo sin RAG:", err)
+  }
+
+  // Knowledge: retrieval-first, full-dump fallback. Lo ponemos en el system
+  // para aprovechar prompt cache cuando es full-dump (idéntico entre llamadas).
+  const knowledgeBlockText = ragContext
+    ? `KNOWLEDGE — citas verbatim relevantes al caso (única fuente para artículos, multas y plazos):\n\n${ragContext}`
+    : `KNOWLEDGE — texto íntegro de las leyes vigentes (referencia única; nunca inventes):\n\n${loadKnowledge(KNOWLEDGE_REVISOR)}`
+
   try {
     const response = await anthropic.messages.parse({
       model: MODEL,
@@ -124,6 +140,11 @@ export async function POST(req: Request) {
         {
           type: "text",
           text: SYSTEM,
+          cache_control: { type: "ephemeral" },
+        },
+        {
+          type: "text",
+          text: knowledgeBlockText,
           cache_control: { type: "ephemeral" },
         },
       ],

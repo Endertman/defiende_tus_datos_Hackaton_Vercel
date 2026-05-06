@@ -1,6 +1,7 @@
 import { z } from "zod/v4"
 import { anthropic, MODEL } from "@/lib/anthropic"
-import { loadKnowledge, KNOWLEDGE_CHAT } from "@/lib/knowledge"
+import { loadKnowledge, KNOWLEDGE_CHAT, retrieveContext } from "@/lib/knowledge"
+import { lastNUserTurns } from "@/lib/rag-query"
 import { CORS_HEADERS, corsResponse } from "@/lib/cors"
 
 export const runtime = "nodejs"
@@ -77,11 +78,7 @@ REGLAS GLOBALES:
 - Si el problema descrito NO corresponde a protección de datos personales, dilo con honestidad y sugiere a dónde acudir (SERNAC para temas de consumo, Inspección del Trabajo para laboral, etc.).
 - Si el usuario te pide algo fuera de tu rol, redirígelo amablemente al tema.
 
-═══════════════════════════════════════════════════════════
-KNOWLEDGE BASE — LEY 21.719:
-═══════════════════════════════════════════════════════════
-
-${loadKnowledge(KNOWLEDGE_CHAT)}`
+El knowledge base con los textos legales (Leyes 19.628 vigente, 21.521 Fintec y 21.719 promulgada) se te entrega como bloque(s) aparte: úsalo como única fuente de citas verbatim.`
 
 const PHASE_HINTS: Record<z.infer<typeof Phase>, string> = {
   intake:
@@ -109,23 +106,57 @@ export async function POST(req: Request) {
 
   const encoder = new TextEncoder()
 
+  // RAG: solo recuperamos en fases donde aporta (entrevista/canal/entrega).
+  // En "intake" el usuario describe libremente, no queremos sesgarlo aún;
+  // en "revisando" la espera es muy corta.
+  const FASES_CON_RAG: Array<z.infer<typeof Phase>> = ["canal", "entrevista", "entrega"]
+  let ragContext = ""
+  if (FASES_CON_RAG.includes(body.fase)) {
+    try {
+      const query = lastNUserTurns(body.messages, 3)
+      if (query) {
+        ragContext = await retrieveContext(query, { type: "ley", topK: 4 })
+      }
+    } catch (err) {
+      console.warn("[chat-legal] retrieval falló, sigo sin RAG:", err)
+    }
+  }
+
+  // Knowledge block: si retrieval respondió, usamos solo esos chunks (lean,
+  // ~2-4KB). Si no, full-dump de las leyes (cacheado por Anthropic) como
+  // fallback. Mismo bloque cacheable en ambos casos.
+  const knowledgeBlockText = ragContext
+    ? `KNOWLEDGE — citas verbatim relevantes (úsalas como única fuente):\n\n${ragContext}`
+    : `KNOWLEDGE — texto íntegro de las leyes vigentes (referencia única; nunca inventes):\n\n${loadKnowledge(KNOWLEDGE_CHAT)}`
+
   const stream = new ReadableStream({
     async start(controller) {
       try {
+        const systemBlocks: Array<{
+          type: "text"
+          text: string
+          cache_control?: { type: "ephemeral" }
+        }> = [
+          {
+            type: "text",
+            text: SYSTEM_BASE,
+            cache_control: { type: "ephemeral" },
+          },
+          {
+            type: "text",
+            text: knowledgeBlockText,
+            cache_control: { type: "ephemeral" },
+          },
+          {
+            type: "text",
+            text: PHASE_HINTS[body.fase],
+          },
+        ]
+
         const apiStream = anthropic.messages.stream({
           model: MODEL,
           max_tokens: 2048,
-          system: [
-            {
-              type: "text",
-              text: SYSTEM_BASE,
-              cache_control: { type: "ephemeral" },
-            },
-            {
-              type: "text",
-              text: PHASE_HINTS[body.fase],
-            },
-          ],
+          system: systemBlocks,
           messages: body.messages,
         })
 
