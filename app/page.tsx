@@ -26,6 +26,12 @@ export default function Page() {
           >
             🔍 ¿Qué saben de usted? — Ver mis datos
           </Link>
+          <Link
+            href="/agente-correos"
+            className="inline-flex items-center justify-center gap-2 w-full rounded-xl border border-blue-600 text-blue-700 text-sm font-semibold px-6 py-3 hover:bg-blue-50 transition-colors"
+          >
+            📧 Abrir Agente de Correos
+          </Link>
           <p className="text-xs text-muted-foreground">
             O use el asistente a la derecha para reclamar directamente →
           </p>
