@@ -41,7 +41,7 @@ export async function GET(request: Request) {
         message.content[0]?.type === "text" ? message.content[0].text : "<p>Solo quería hacer seguimiento.</p>"
       await updateTrackedEmailStatus(email.id, "esperando_aprobacion", { followUpHtml })
 
-      const approvalUrl = `${process.env.BASE_URL}/api/agente-correos/approve-followup?id=${email.id}`
+      const approvalUrl = `${process.env.NEXT_PUBLIC_BASE_URL}/api/agente-correos/approve-followup?id=${email.id}`
       await notifyAgentOwner({
         subject: `[Agente Correos] Aprobar seguimiento para ${email.recipientEmail}`,
         html: `<p>Se generó un follow-up para ${email.recipientEmail}.</p><p><a href="${approvalUrl}">Aprobar envío</a></p>`,

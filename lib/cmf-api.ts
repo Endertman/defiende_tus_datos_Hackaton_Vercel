@@ -23,6 +23,34 @@ function url(path: string): string {
   return `${CMF_BASE}${path}?apikey=${apiKey()}&formato=json`
 }
 
+async function fetchJsonWithRetry(
+  endpointPath: string,
+  retries = 1,
+): Promise<unknown | null> {
+  let lastError: unknown = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url(endpointPath), {
+        // CMF sometimes responds slowly; 5s caused avoidable fallbacks.
+        signal: AbortSignal.timeout(12000),
+      })
+      if (!res.ok) {
+        lastError = new Error(`HTTP ${res.status}`)
+        continue
+      }
+      return await res.json()
+    } catch (error) {
+      lastError = error
+    }
+  }
+  console.warn(
+    `[cmf-api] Request failed for ${endpointPath}: ${
+      lastError instanceof Error ? lastError.message : String(lastError)
+    }`,
+  )
+  return null
+}
+
 // Returns the list of CMF-registered banking/financial institutions for the most recent closed month.
 // Falls back to empty array if the API key is not set or the request fails.
 export async function getCmfInstituciones(): Promise<CmfInstitucion[]> {
@@ -38,11 +66,8 @@ export async function getCmfInstituciones(): Promise<CmfInstitucion[]> {
   const month = String(d.getMonth() + 1).padStart(2, "0")
 
   try {
-    const res = await fetch(url(`/resultados/${year}/${month}/instituciones`), {
-      signal: AbortSignal.timeout(5000),
-    })
-    if (!res.ok) return []
-    const json = await res.json()
+    const json = await fetchJsonWithRetry(`/resultados/${year}/${month}/instituciones`)
+    if (!json) return []
 
     // CMF returns { Instituciones: [ { Institucion: { Codigo, Nombre } } ] }
     // Real API shape: { DescripcionesCodigosDeInstituciones: [{ CodigoInstitucion, NombreInstitucion }] }
@@ -58,7 +83,12 @@ export async function getCmfInstituciones(): Promise<CmfInstitucion[]> {
 
     _instituciones = { data, ts: now }
     return data
-  } catch {
+  } catch (error) {
+    console.warn(
+      `[cmf-api] Unexpected parsing error in getCmfInstituciones: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    )
     return []
   }
 }
@@ -71,9 +101,8 @@ export async function getUtm(): Promise<UtmValue | null> {
   if (_utm && now - _utm.ts < TTL) return _utm.data
 
   try {
-    const res = await fetch(url("/utm"), { signal: AbortSignal.timeout(5000) })
-    if (!res.ok) return null
-    const json = await res.json()
+    const json = await fetchJsonWithRetry("/utm")
+    if (!json) return null
 
     // Real API shape: { UTMs: [{ Valor: "70.588", Fecha: "2026-05-01" }] }
     const first = json?.UTMs?.[0]
@@ -89,7 +118,12 @@ export async function getUtm(): Promise<UtmValue | null> {
 
     _utm = { data, ts: now }
     return data
-  } catch {
+  } catch (error) {
+    console.warn(
+      `[cmf-api] Unexpected parsing error in getUtm: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    )
     return null
   }
 }

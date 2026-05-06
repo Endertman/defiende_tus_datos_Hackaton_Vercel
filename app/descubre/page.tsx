@@ -78,7 +78,7 @@ export default function DescubrePage() {
               ¿Qué saben de usted?
             </h1>
             <p className="text-sm text-muted-foreground leading-relaxed">
-              Ingrese su RUT y le mostramos cuáles de las 20 empresas más grandes de Chile
+              Ingrese su RUT y le mostramos cuáles de las principales empresas de Chile
               probablemente tienen su información — y cómo recuperarla.
             </p>
           </div>
@@ -128,7 +128,7 @@ export default function DescubrePage() {
 
           <div className="mt-8 grid grid-cols-3 gap-3 text-center">
             {[
-              { n: "20", label: "empresas analizadas" },
+              { n: "21+", label: "empresas analizadas" },
               { n: "Ley 21.719", label: "base legal" },
               { n: "ARCO+P", label: "derechos aplicables" },
             ].map((s) => (

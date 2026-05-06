@@ -268,6 +268,21 @@ export const EMPRESAS: EmpresaPerfil[] = [
   },
   // ── Seguros / AFP ────────────────────────────────────────────────────────────
   {
+    id: "afp-modelo",
+    nombre: "AFP Modelo",
+    sector: "seguro_afp",
+    emoji: "🏦",
+    datos: ["RUT", "nombre", "historial laboral completo", "sueldo imponible", "empleadores anteriores", "dirección", "datos de salud (si aplica)"],
+    riesgo: "alto",
+    cmf: false,
+    arco: {
+      canal: "AFPModelo.cl → Mi AFP Modelo → Solicitud de datos personales",
+      url: "https://www.afpmodelo.cl",
+      plazo: "30 días",
+      notas: "AFP Modelo es la AFP con más afiliados en Chile. Tiene tu historial laboral desde que cotizas. Puedes pedir acceso, rectificación o portabilidad.",
+    },
+  },
+  {
     id: "afp-habitat",
     nombre: "AFP Habitat",
     sector: "seguro_afp",
@@ -278,7 +293,7 @@ export const EMPRESAS: EmpresaPerfil[] = [
     arco: {
       canal: "Habitat.cl → Mi Habitat → Datos personales",
       plazo: "30 días",
-      notas: "Las AFP tienen tu historial laboral completo. Datos de salud son sensibles bajo Ley 21.719.",
+      notas: "Las AFP tienen tu historial laboral completo. Datos de salud son categoría especial bajo Ley 21.719.",
     },
   },
   {
